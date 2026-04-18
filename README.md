@@ -1,4 +1,4 @@
-# Jarvis Local v1
+# Jarvis
 
 로컬에서 동작하는 저비용 음성 비서 프로젝트입니다.
 
@@ -65,7 +65,7 @@ python -m app.voice_main
 
 개발/테스트할 때는 아래 순서가 가장 편합니다.
 
-1. 터미널 1개: `cd /Users/gwaggiju/3_Javis && source .venv/bin/activate`
+1. 터미널 1개: `cd /Users/gwaggiju/Jarvis && source .venv/bin/activate`
 2. 텍스트 모드 먼저 검증: `python -m app.main`
 3. 기능 확인 후 음성 모드: `python -m app.voice_main`
 4. 지식 추가 시 `data/knowledge` 파일만 수정하고 바로 재질문
@@ -75,7 +75,7 @@ python -m app.voice_main
 `data/knowledge` 폴더에 `.md` 또는 `.txt` 파일을 넣으면, 질문 시 관련 문맥이 자동으로 검색되어 답변에 반영됩니다.
 
 예시 파일:
-- `/Users/gwaggiju/3_Javis/data/knowledge/profile.md`
+- `/Users/gwaggiju/Jarvis/data/knowledge/profile.md`
 
 추가 예시:
 
@@ -94,7 +94,7 @@ crontab -e
 평일 오전 8시:
 
 ```cron
-0 8 * * 1-5 /Users/gwaggiju/3_Javis/.venv/bin/python /Users/gwaggiju/3_Javis/scripts/morning_brief.py
+0 8 * * 1-5 /Users/gwaggiju/Jarvis/.venv/bin/python /Users/gwaggiju/Jarvis/scripts/morning_brief.py
 ```
 
 ## 트러블슈팅

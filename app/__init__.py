@@ -1,1 +1,1 @@
-# Jarvis Local app package
+# Jarvis app package

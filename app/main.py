@@ -6,7 +6,7 @@ from .tools import try_local_tool
 
 
 def run_cli() -> None:
-    print("Jarvis Local CLI 시작. 종료: quit")
+    print("Jarvis CLI 시작. 종료: quit")
     while True:
         user = input("You> ").strip()
         if user.lower() in {"quit", "exit"}:
