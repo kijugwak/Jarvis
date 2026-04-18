@@ -107,3 +107,4 @@ crontab -e
   - `pip install -r requirements.txt`
 - 음성 입력 안됨:
   - macOS 마이크 권한 허용 확인
+# Jarvis
