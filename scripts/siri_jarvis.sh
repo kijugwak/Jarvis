@@ -8,6 +8,14 @@ LOG_OUT="$HOME/Library/Logs/jarvis.out.log"
 LOG_ERR="$HOME/Library/Logs/jarvis.err.log"
 ACTION="${1:-help}"
 DEBUG_LOG="$HOME/Library/Logs/jarvis.shortcut.log"
+LOCK_DIR="/tmp/jarvis_siri_shortcut.lock"
+
+show_error_box() {
+  local message="$1"
+  /usr/bin/osascript <<EOF >/dev/null 2>&1 || true
+display dialog "$message" buttons {"확인"} default button "확인" with icon caution with title "Jarvis 오류"
+EOF
+}
 
 notify() {
   local title="$1"
@@ -22,12 +30,68 @@ log_debug() {
   } >> "$DEBUG_LOG"
 }
 
+on_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  local cmd="${3:-unknown}"
+  local msg="실행 중 오류가 발생했습니다.\n\n동작: $ACTION\n라인: $line_no\n코드: $exit_code\n명령: $cmd\n\n로그: $DEBUG_LOG"
+  log_debug "ERROR action='$ACTION' line=$line_no code=$exit_code cmd='$cmd'"
+  show_error_box "$msg"
+}
+
+trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
+acquire_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    return 0
+  fi
+  # If another shortcut run is in flight, wait briefly.
+  for _ in 1 2 3 4 5; do
+    sleep 0.2
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      return 0
+    fi
+  done
+  show_error_box "다른 Jarvis 단축어가 실행 중입니다. 잠시 후 다시 시도해 주세요."
+  exit 1
+}
+
+release_lock() {
+  rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
+}
+
+trap 'release_lock' EXIT
+
 prompt_retry_input() {
   local prompt="${1:-다시 입력해 주세요.}"
   /usr/bin/osascript <<EOF
 set userInput to text returned of (display dialog "$prompt" default answer "" buttons {"취소", "전송"} default button "전송")
 return userInput
 EOF
+}
+
+prompt_missing_input() {
+  /usr/bin/osascript <<EOF
+set userInput to text returned of (display dialog "보낼 명령이 비어 있어요. 다시 입력해 주세요." default answer "" buttons {"취소", "전송"} default button "전송")
+return userInput
+EOF
+}
+
+run_one_shot_with_retry() {
+  local query="$1"
+  local output=""
+  local attempt
+  for attempt in 1 2; do
+    output="$("$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$query" 2>&1)" && {
+      echo "$output"
+      log_debug "one_shot success attempt=$attempt"
+      return 0
+    }
+    log_debug "one_shot failed attempt=$attempt output='${output}'"
+    sleep 0.3
+  done
+  echo "$output"
+  return 1
 }
 
 start_voice_daemon() {
@@ -74,6 +138,7 @@ EOF
 }
 
 ask() {
+  acquire_lock
   shift || true
   local query="${*:-}"
   # Fallback for shortcut invocations that pass input via stdin.
@@ -86,12 +151,19 @@ ask() {
 
   log_debug "ask invoked. raw_query='${query}' action='$ACTION'"
   if [[ -z "$query" ]]; then
-    log_debug "ask failed: empty query"
-    echo "Usage: $0 ask \"질문 내용\""
-    exit 1
+    local prompted
+    prompted="$(prompt_missing_input)" || true
+    query="$(echo "${prompted:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    log_debug "ask prompted fallback query='${query}'"
+    if [[ -z "$query" ]]; then
+      log_debug "ask failed: empty query"
+      echo "Usage: $0 ask \"질문 내용\""
+      exit 1
+    fi
   fi
+
   local output
-  output="$("$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$query" 2>&1)" || {
+  output="$(run_one_shot_with_retry "$query" 2>&1)" || {
     log_debug "ask failed during python execution"
     echo "$output"
     exit 1
@@ -106,7 +178,7 @@ ask() {
     retry="$(echo "${retry:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     if [[ -n "$retry" ]]; then
       log_debug "ask retry with query='${retry}'"
-      "$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$retry" || true
+      run_one_shot_with_retry "$retry" || true
     else
       log_debug "ask retry canceled or empty"
     fi
@@ -120,7 +192,7 @@ ask() {
     follow="$(echo "${follow:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     if [[ -n "$follow" ]]; then
       log_debug "ask follow-up sent='${follow}'"
-      "$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$follow" || true
+      run_one_shot_with_retry "$follow" || true
     else
       log_debug "ask follow-up canceled or empty"
     fi

@@ -40,6 +40,11 @@ APP_MAP = {
     "chrome": "Google Chrome",
     "카카오톡": "KakaoTalk",
     "kakaotalk": "KakaoTalk",
+    "메모": "Notes",
+    "미리보기": "Preview",
+    "캘린더": "Calendar",
+    "사파리": "Safari",
+    "메시지": "Messages",
     "notion app": "Notion",
 }
 
@@ -77,6 +82,61 @@ def _open_bundle(bundle_id: str) -> bool:
 
 def _norm(text: str) -> str:
     return text.strip().lower()
+
+
+def _extract_app_name(user_text: str) -> str | None:
+    raw = user_text.strip()
+    # 예: "카카오톡 앱 실행해줘", "메모 앱 열어줘"
+    m = re.search(r"(.+?)\s*앱\s*(열어|켜|실행)", raw, flags=re.IGNORECASE)
+    if m:
+        name = m.group(1).strip()
+        return name if name else None
+
+    # 예: "메모 실행해줘", "카카오톡 열어줘"
+    m2 = re.search(r"(.+?)\s*(열어|켜|실행)(해줘|해 줘)?", raw, flags=re.IGNORECASE)
+    if m2:
+        candidate = m2.group(1).strip()
+        # 사이트/검색 류는 앱 추출에서 제외
+        lowered = candidate.lower()
+        if any(k in lowered for k in ["검색", "youtube", "유튜브", "naver", "네이버", "google", "구글", "뉴스"]):
+            return None
+        return candidate if candidate else None
+
+    return None
+
+
+def _is_app_open_only_intent(text: str) -> bool:
+    """
+    True when user intent is just opening an app, not doing a task inside it.
+    Examples:
+      - "카카오톡 열어줘" -> True
+      - "카카오톡에서 홍길동에게 메시지 보내줘" -> False
+    """
+    lowered = text.lower().replace(" ", "")
+
+    # If user indicates in-app work, defer to LLM workflow.
+    in_app_markers = [
+        "에서",
+        "안에서",
+        "으로가서",
+        "들어가서",
+        "메시지",
+        "보내",
+        "작성",
+        "정리",
+        "요약",
+        "검색",
+        "예약",
+        "설정",
+        "삭제",
+        "전송",
+        "업로드",
+        "다운로드",
+    ]
+    if any(m in lowered for m in in_app_markers):
+        return False
+
+    return True
 
 
 def _open_chrome(url: str) -> ToolResult:
@@ -167,6 +227,10 @@ def try_local_tool(user_text: str) -> ToolResult:
 
     wants_open = any(k in text for k in ["열어", "켜", "open", "실행"])
     wants_chrome = any(k in text for k in ["chrome", "크롬", "브라우저"])
+    app_name = _extract_app_name(user_text)
+    if app_name is not None and wants_open and not wants_chrome and _is_app_open_only_intent(user_text):
+        mapped = APP_MAP.get(app_name.lower(), app_name)
+        return _open_app(mapped)
 
     if wants_open and wants_chrome:
         for key, url in SITE_MAP.items():
@@ -178,6 +242,32 @@ def try_local_tool(user_text: str) -> ToolResult:
         return _open_chrome(url_match.group(1))
 
     if any(k in text for k in ["검색", "search"]):
+        if any(k in text for k in ["naver", "네이버"]):
+            q = re.sub(
+                r"(네이버(에서)?|naver|크롬|chrome|브라우저|에서|으로|로|에|"
+                r"들어가서|들어가|가서|켜서|열어서|실행해서|검색(해줘|해 줘)?|search( for)?)",
+                "",
+                user_text,
+                flags=re.IGNORECASE,
+            ).strip()
+            q = re.sub(r"\s+", " ", q).strip()
+            if q:
+                return _open_chrome(f"https://search.naver.com/search.naver?query={quote_plus(q)}")
+            return ToolResult(True, "네이버 검색어를 같이 말해 주세요. 예: 네이버에서 AI 뉴스 검색해줘")
+
+        if any(k in text for k in ["google", "구글"]):
+            q = re.sub(
+                r"(구글(에서)?|google|크롬|chrome|브라우저|에서|으로|로|에|"
+                r"들어가서|들어가|가서|켜서|열어서|실행해서|검색(해줘|해 줘)?|search( for)?)",
+                "",
+                user_text,
+                flags=re.IGNORECASE,
+            ).strip()
+            q = re.sub(r"\s+", " ", q).strip()
+            if q:
+                return _open_chrome(f"https://www.google.com/search?q={quote_plus(q)}")
+            return ToolResult(True, "구글 검색어를 같이 말해 주세요. 예: 구글에서 AI 뉴스 검색해줘")
+
         if any(k in text for k in ["youtube", "유튜브"]):
             q = re.sub(
                 r"(유튜브(에서)?|youtube|크롬|chrome|브라우저|에서|으로|로|에|"
