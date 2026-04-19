@@ -15,10 +15,14 @@ notify() {
 }
 
 start_voice_daemon() {
-  "$ROOT_DIR/scripts/install_launch_agent.sh" daemon >/dev/null
-  launchctl kickstart -k "gui/$(id -u)/com.gwaggiju.jarvis" >/dev/null 2>&1 || true
-  notify "Jarvis" "음성 대기 모드로 실행했어요."
-  echo "Jarvis started (voice daemon)."
+  stop_jarvis >/dev/null 2>&1 || true
+  local greet="Good evening, sir. Jarvis is now online."
+  notify "Jarvis" "$greet"
+  say -v "${TTS_VOICE:-Daniel}" -r "${TTS_RATE:-165}" "$greet" >/dev/null 2>&1 \
+    || say -r "${TTS_RATE:-165}" "$greet" >/dev/null 2>&1 \
+    || say "$greet" >/dev/null 2>&1 \
+    || true
+  echo "Jarvis Siri-only mode enabled. Greeting spoken."
 }
 
 stop_jarvis() {
@@ -45,13 +49,23 @@ work_start() {
   echo "Work-start automation complete."
 }
 
+ask() {
+  shift || true
+  local query="${*:-}"
+  if [[ -z "$query" ]]; then
+    echo "Usage: $0 ask \"질문 내용\""
+    exit 1
+  fi
+  "$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$query"
+}
+
 status() {
   if launchctl list | grep -q "com.gwaggiju.jarvis"; then
     echo "LaunchAgent: loaded"
   else
     echo "LaunchAgent: not loaded"
   fi
-  if pgrep -f "python -m app.wake_daemon" >/dev/null 2>&1; then
+  if pgrep -f "app.wake_daemon" >/dev/null 2>&1; then
     echo "Voice daemon: running"
   else
     echo "Voice daemon: not running"
@@ -64,6 +78,9 @@ status() {
 case "$ACTION" in
   start)
     start_voice_daemon
+    ;;
+  ask)
+    ask "$@"
     ;;
   stop)
     stop_jarvis
@@ -79,8 +96,9 @@ case "$ACTION" in
     ;;
   *)
     cat <<EOF
-Usage: $0 {start|stop|briefing|work-start|status}
-  start      Start Jarvis voice daemon mode
+Usage: $0 {start|ask|stop|briefing|work-start|status}
+  start      Siri-only mode (disable always-listening daemon)
+  ask        Run one Siri command (text -> Jarvis -> voice reply)
   stop       Stop Jarvis agent/process
   briefing   Run morning briefing and notify
   work-start Open work apps and start Jarvis
