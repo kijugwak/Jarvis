@@ -7,11 +7,27 @@ PLIST_PATH="$HOME/Library/LaunchAgents/com.gwaggiju.jarvis.plist"
 LOG_OUT="$HOME/Library/Logs/jarvis.out.log"
 LOG_ERR="$HOME/Library/Logs/jarvis.err.log"
 ACTION="${1:-help}"
+DEBUG_LOG="$HOME/Library/Logs/jarvis.shortcut.log"
 
 notify() {
   local title="$1"
   local body="$2"
   /usr/bin/osascript -e "display notification \"${body}\" with title \"${title}\"" >/dev/null 2>&1 || true
+}
+
+log_debug() {
+  local msg="$1"
+  {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg"
+  } >> "$DEBUG_LOG"
+}
+
+prompt_retry_input() {
+  local prompt="${1:-다시 입력해 주세요.}"
+  /usr/bin/osascript <<EOF
+set userInput to text returned of (display dialog "$prompt" default answer "" buttons {"취소", "전송"} default button "전송")
+return userInput
+EOF
 }
 
 start_voice_daemon() {
@@ -49,14 +65,91 @@ work_start() {
   echo "Work-start automation complete."
 }
 
+prompt_followup_input() {
+  local prompt="${1:-추가로 보낼 답장을 입력해 주세요.}"
+  /usr/bin/osascript <<EOF
+set userInput to text returned of (display dialog "$prompt" default answer "" buttons {"취소", "보내기"} default button "보내기")
+return userInput
+EOF
+}
+
 ask() {
   shift || true
   local query="${*:-}"
+  # Fallback for shortcut invocations that pass input via stdin.
   if [[ -z "$query" ]]; then
+    local stdin_text
+    stdin_text="$(cat || true)"
+    query="${stdin_text:-}"
+  fi
+  query="$(echo "$query" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  log_debug "ask invoked. raw_query='${query}' action='$ACTION'"
+  if [[ -z "$query" ]]; then
+    log_debug "ask failed: empty query"
     echo "Usage: $0 ask \"질문 내용\""
     exit 1
   fi
-  "$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$query"
+  local output
+  output="$("$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$query" 2>&1)" || {
+    log_debug "ask failed during python execution"
+    echo "$output"
+    exit 1
+  }
+  echo "$output"
+
+  # If Jarvis asks for missing keywords (e.g., search query), prompt user to re-enter immediately.
+  if echo "$output" | grep -Eq "검색어를 같이 말해 주세요|같이 말해 주세요"; then
+    log_debug "ask requires retry input"
+    local retry
+    retry="$(prompt_retry_input "검색어를 못 알아들었어요. 다시 입력해 주세요.")" || true
+    retry="$(echo "${retry:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [[ -n "$retry" ]]; then
+      log_debug "ask retry with query='${retry}'"
+      "$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$retry" || true
+    else
+      log_debug "ask retry canceled or empty"
+    fi
+  fi
+
+  # If Jarvis asks a confirmation/follow-up question, allow one more immediate user reply.
+  if echo "$output" | grep -Eq "진행하시겠습니까|하시겠습니까|원하시나요|할까요\\?|괜찮을까요\\?"; then
+    log_debug "ask follow-up prompt opened"
+    local follow
+    follow="$(prompt_followup_input "Jarvis가 확인 질문을 보냈어요. 답장을 입력해 주세요.")" || true
+    follow="$(echo "${follow:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [[ -n "$follow" ]]; then
+      log_debug "ask follow-up sent='${follow}'"
+      "$ROOT_DIR/.venv/bin/python" -m app.siri_one_shot "$follow" || true
+    else
+      log_debug "ask follow-up canceled or empty"
+    fi
+  fi
+
+  log_debug "ask completed"
+}
+
+ask_visible() {
+  shift || true
+  local query="${*:-}"
+  if [[ -z "$query" ]]; then
+    echo "Usage: $0 ask-visible \"질문 내용\""
+    exit 1
+  fi
+
+  local escaped="${query//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  local cmd="cd $ROOT_DIR; echo '=== JARVIS TASK START ==='; echo 'QUERY: $escaped'; echo; ./scripts/siri_jarvis.sh ask \"$escaped\"; echo; echo '=== JARVIS TASK END ==='"
+  local script
+  script=$(cat <<EOF
+tell application "Terminal"
+  activate
+  do script "$cmd"
+end tell
+EOF
+)
+  /usr/bin/osascript -e "$script" >/dev/null 2>&1 || true
+  echo "Opened Terminal progress view."
 }
 
 status() {
@@ -82,6 +175,9 @@ case "$ACTION" in
   ask)
     ask "$@"
     ;;
+  ask-visible)
+    ask_visible "$@"
+    ;;
   stop)
     stop_jarvis
     ;;
@@ -96,9 +192,10 @@ case "$ACTION" in
     ;;
   *)
     cat <<EOF
-Usage: $0 {start|ask|stop|briefing|work-start|status}
+Usage: $0 {start|ask|ask-visible|stop|briefing|work-start|status}
   start      Siri-only mode (disable always-listening daemon)
   ask        Run one Siri command (text -> Jarvis -> voice reply)
+  ask-visible Run one Siri command in Terminal (visible progress)
   stop       Stop Jarvis agent/process
   briefing   Run morning briefing and notify
   work-start Open work apps and start Jarvis
